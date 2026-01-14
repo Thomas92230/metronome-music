@@ -1,19 +1,24 @@
+declare global {
+  interface Window {
+    webkitAudioContext: typeof AudioContext;
+  }
+}
+
 let audioContext: AudioContext | null = null;
+let masterGain: GainNode | null = null;
 let nextNoteTime = 0;
 let isPlaying = false;
 let tempo = 120;
+let currentSoundType = "mechanical";
 
-// Scheduler timing
-const lookahead = 25; // ms
+const lookahead = 25.0; // ms
 const scheduleAheadTime = 0.1; // secondes
 let timerID: number | null = null;
 
 type Subdivision = "quarter" | "eighth" | "triplet";
-
 let subdivision: Subdivision = "quarter";
 let subdivisionIndex = 0;
 
-// ✅ tempoRamp est maintenant utilisé pour calculer le tempo effectif
 let tempoRamp: {
   enabled: boolean;
   targetBpm: number;
@@ -22,82 +27,72 @@ let tempoRamp: {
 } | null = null;
 
 let barCount = 0;
-
-// Rythme
 let currentBeat = 0;
 let beatsPerBar = 4;
 
-// Count-in
-const COUNT_IN_BEATS = 4;
-let countInRemaining = 0;
-
-// ✅ MULTI LISTENERS SAFE
-const beatListeners = new Set<
-  (beat: number, isAccent: boolean) => void
->();
+const beatListeners = new Set<(beat: number, isAccent: boolean, currentBpm: number) => void>();
 
 /**
- * AudioContext (créé après interaction utilisateur)
+ * Initialise l'AudioContext et le système de gain
  */
-function getAudioContext() {
+function initAudio() {
   if (!audioContext) {
-    audioContext = new AudioContext();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    audioContext = new AudioContextClass();
+    
+    masterGain = audioContext.createGain();
+    masterGain.gain.value = 0.5;
+    // ON CONNECTE ICI UNE SEULE FOIS
+    masterGain.connect(audioContext.destination);
   }
-  return audioContext;
+}
+
+function getAudioContext(): AudioContext {
+  if (!audioContext) initAudio();
+  return audioContext!;
 }
 
 /**
- * Joue un clic selon le type
+ * Joue le clic
  */
-function playClick(
-  time: number,
-  type: "normal" | "accent" | "count-in"
-) {
+function playClick(time: number, type: "normal" | "accent" | "cue") {
   const ctx = getAudioContext();
+  if (!masterGain) return;
 
   const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
+  const clickGain = ctx.createGain();
 
-  if (type === "accent") {
-    osc.frequency.value = 1500;
-    gain.gain.setValueAtTime(1, time);
-  } else if (type === "count-in") {
-    osc.frequency.value = 1800;
-    gain.gain.setValueAtTime(0.9, time);
-  } else {
-    osc.frequency.value = 1000;
-    gain.gain.setValueAtTime(0.6, time);
-  }
+  const synthPresets: Record<string, { freq: number; wave: OscillatorType; decay: number }> = {
+    mechanical: { freq: 1000, wave: "sine", decay: 0.05 },
+    conga: { freq: 400, wave: "triangle", decay: 0.15 },
+    woodblock: { freq: 2200, wave: "sine", decay: 0.03 },
+    clave: { freq: 3200, wave: "sine", decay: 0.02 }
+  };
 
-  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+  const preset = synthPresets[currentSoundType] || synthPresets.mechanical;
+  
+  let finalFreq = preset.freq;
+  if (type === "accent") finalFreq *= 1.5;
+  if (type === "cue") finalFreq *= 0.8; 
 
-  osc.connect(gain);
-  gain.connect(ctx.destination);
+  osc.type = preset.wave;
+  osc.frequency.setValueAtTime(finalFreq, time);
+
+  // Enveloppe pour éviter les clics désagréables
+  clickGain.gain.setValueAtTime(0, time);
+  clickGain.gain.linearRampToValueAtTime(1, time + 0.005); 
+  clickGain.gain.exponentialRampToValueAtTime(0.001, time + preset.decay);
+
+  osc.connect(clickGain);
+  clickGain.connect(masterGain);
 
   osc.start(time);
-  osc.stop(time + 0.05);
+  osc.stop(time + preset.decay + 0.01); 
 }
 
-/**
- * Passe au temps suivant
- */
 function nextNote() {
-  // ✅ UTILISATION DE TEMPORAMP : 
-  // On calcule si le tempo doit augmenter en fonction de la rampe
-  if (tempoRamp?.enabled && barCount > 0 && barCount % tempoRamp.everyBars === 0 && currentBeat === 0 && subdivisionIndex === 0) {
-      if (tempo < tempoRamp.targetBpm) {
-          tempo = Math.min(tempo + tempoRamp.step, tempoRamp.targetBpm);
-      }
-  }
-
-  const effectiveTempo = tempo;
-  const beatsPerSecond = effectiveTempo / 60;
-  const secondsPerBeat = 1 / beatsPerSecond;
-
-  let notesPerBeat = 1;
-  if (subdivision === "eighth") notesPerBeat = 2;
-  if (subdivision === "triplet") notesPerBeat = 3;
-
+  const secondsPerBeat = 60.0 / tempo;
+  const notesPerBeat = subdivision === "eighth" ? 2 : subdivision === "triplet" ? 3 : 1;
   const secondsPerNote = secondsPerBeat / notesPerBeat;
 
   nextNoteTime += secondsPerNote;
@@ -105,113 +100,109 @@ function nextNote() {
 
   if (subdivisionIndex >= notesPerBeat) {
     subdivisionIndex = 0;
-    const nextBeat = (currentBeat + 1) % beatsPerBar;
+    currentBeat++;
     
-    if (nextBeat === 0) {
+    if (currentBeat >= beatsPerBar) {
+      currentBeat = 0;
       barCount++;
+      
+      if (tempoRamp?.enabled && barCount % tempoRamp.everyBars === 0) {
+        if (tempo < tempoRamp.targetBpm) {
+          tempo = Math.min(tempo + tempoRamp.step, tempoRamp.targetBpm);
+        } else if (tempo > tempoRamp.targetBpm) {
+          tempo = Math.max(tempo - tempoRamp.step, tempoRamp.targetBpm);
+        }
+      }
     }
-    
-    currentBeat = nextBeat;
   }
 }
 
-/**
- * Faut-il jouer le count-in ?
- */
-function shouldPlayCountIn() {
-  return countInRemaining > 0;
-}
-
-/**
- * Scheduler précis (cœur du moteur)
- */
 function scheduler() {
   const ctx = getAudioContext();
-
+  // Tant qu'on a des notes à planifier dans la fenêtre de temps
   while (nextNoteTime < ctx.currentTime + scheduleAheadTime) {
-    let clickType: "normal" | "accent" | "count-in" = "normal";
-
+    let clickType: "normal" | "accent" | "cue" = "normal";
+    
     const isAccent = currentBeat === 0 && subdivisionIndex === 0;
+    const isChangeMeasure = tempoRamp?.enabled && (barCount + 1) % tempoRamp.everyBars === 0;
+    const isCueBeat = isChangeMeasure && (beatsPerBar - currentBeat) <= 1 && subdivisionIndex === 0;
 
-    if (isAccent) clickType = "accent";
+    if (isCueBeat) clickType = "cue";
+    else if (isAccent) clickType = "accent";
 
-    if (
-      shouldPlayCountIn() &&
-      currentBeat >= beatsPerBar - COUNT_IN_BEATS
-    ) {
-      clickType = "count-in";
-      countInRemaining--;
-    }
-
-    beatListeners.forEach((listener) => {
-      listener(currentBeat, isAccent);
-    });
-
+    // On prévient l'interface
+    beatListeners.forEach((listener) => listener(currentBeat, isAccent, tempo));
+    
+    // On joue le son
     playClick(nextNoteTime, clickType);
     nextNote();
   }
 }
 
-/**
- * Démarrer le métronome
- */
-export function startMetronome(bpm: number) {
+// --- EXPORTS ---
+
+export function setVolume(value: number) {
+  initAudio();
+  if (masterGain && audioContext) {
+    masterGain.gain.setTargetAtTime(value, audioContext.currentTime, 0.015);
+  }
+}
+
+export function setSoundType(type: string) {
+  currentSoundType = type;
+}
+
+export async function startMetronome(bpm: number) {
   if (isPlaying) return;
-
-  tempo = bpm;
+  
+  initAudio();
   const ctx = getAudioContext();
-
+  
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
+  }
+  
+  tempo = bpm; 
   currentBeat = 0;
   subdivisionIndex = 0;
   barCount = 0;
+  
+  // On cale le départ juste après le temps actuel
   nextNoteTime = ctx.currentTime + 0.05;
-  countInRemaining = COUNT_IN_BEATS;
-
   isPlaying = true;
-  timerID = window.setInterval(scheduler, lookahead);
+
+  if (timerID) window.clearInterval(timerID);
+  timerID = window.setInterval(() => scheduler(), lookahead);
 }
 
-/**
- * Arrêter le métronome
- */
 export function stopMetronome() {
-  if (!isPlaying) return;
-
   isPlaying = false;
-
   if (timerID) {
-    clearInterval(timerID);
+    window.clearInterval(timerID);
     timerID = null;
   }
 }
 
-export function setTempo(bpm: number) {
-  tempo = bpm;
+export function setTempo(bpm: number) { 
+  tempo = bpm; 
 }
 
-export function setTimeSignature(beats: number) {
-  beatsPerBar = beats;
+export function setTimeSignature(beats: number) { 
+  beatsPerBar = beats; 
+  if (currentBeat >= beats) currentBeat = 0;
 }
 
-export function onBeat(
-  callback: (beat: number, isAccent: boolean) => void
-) {
-  beatListeners.add(callback);
-  return () => {
-    beatListeners.delete(callback);
-  };
-}
-
-export function setSubdivision(value: Subdivision) {
-  subdivision = value;
+export function setSubdivision(value: Subdivision) { 
+  subdivision = value; 
 }
 
 export function setTempoRamp(ramp: {
-    enabled: boolean;
-    targetBpm: number;
-    step: number;
-    everyBars: number;
+  enabled: boolean; targetBpm: number; step: number; everyBars: number;
 } | null) {
   tempoRamp = ramp;
-  barCount = 0;
+}
+
+export function onBeat(callback: (beat: number, isAccent: boolean, currentBpm: number) => void) {
+  beatListeners.add(callback);
+  return () => beatListeners.delete(callback);
 }

@@ -1,8 +1,9 @@
 export type TempoRamp = {
   enabled: boolean;
   targetBpm: number;
-  step: number; // variation BPM
-  everyBars: number; // toutes les X mesures
+  step: number; 
+  everyBars: number; 
+  stopAtTarget: boolean; // Si true, on arrête de monter une fois la cible atteinte
 };
 
 export type Preset = {
@@ -11,4 +12,6 @@ export type Preset = {
   beatsPerBar: number;
   subdivision: "quarter" | "eighth" | "triplet";
   tempoRamp?: TempoRamp;
+  countInMeasures: number; // Nombre de mesures de décompte avant le départ
 };
+
