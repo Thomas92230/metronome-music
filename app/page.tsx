@@ -11,7 +11,6 @@ interface MetronomeSettings {
   activeInstrument: string;
 }
 
-// --- TRADUCTIONS ---
 const translations = {
   fr: {
     sons: "SONS", tempo: "TEMPO", delai: "Délai", temps: "TEMPS",
@@ -37,18 +36,17 @@ const instruments = [
 ];
 
 export default function MetronomePro() {
-  // --- ÉTATS ---
   const [lang, setLang] = useState<"fr" | "en">("fr");
   const t = translations[lang];
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [bpm, setBpm] = useState(120);
-  const [beatsPerBar, setBeatsPerBar] = useState(4);
   const [activeInstrument, setActiveInstrument] = useState("elec_1");
   const [seconds, setSeconds] = useState(0);
   const [totalMeasures, setTotalMeasures] = useState(0);
   const [flash, setFlash] = useState(false);
-  const [memories, setMemories] = useState<(MetronomeSettings | null)[]>(new Array(10).fill(null));
+  const [currentBeatState, setCurrentBeatState] = useState(0);
+  const [memories] = useState<(MetronomeSettings | null)[]>(new Array(10).fill(null));
   
   const [silentMode, setSilentMode] = useState({ enabled: false, audible: 2, silent: 2 });
   const [automation, setAutomation] = useState({
@@ -58,11 +56,27 @@ export default function MetronomePro() {
     step: 5,
   });
 
-  const { currentBpm, beat } = useMetronome();
+  const { currentBpm } = useMetronome();
   const displayBpm = isPlaying ? Math.round(currentBpm) : bpm;
   const delayMs = (60000 / displayBpm).toFixed(2);
 
-  // --- LOGIQUE ---
+  useEffect(() => {
+    const unsubscribe = Engine.onBeat((beat, isAccent) => {
+      setCurrentBeatState(beat);
+      if (isAccent) {
+        requestAnimationFrame(() => {
+          setFlash(true);
+          setTotalMeasures(prev => prev + 1);
+          setTimeout(() => setFlash(false), 100);
+        });
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   const updateBpm = useCallback((val: number) => {
     const newBpm = Math.min(Math.max(val, 10), 300);
     setBpm(newBpm);
@@ -81,158 +95,236 @@ export default function MetronomePro() {
     }
   }, [isPlaying, bpm]);
 
-  const handlePreset = (slot: number, save: boolean) => {
-    if (save) {
-      const newMems = [...memories];
-      newMems[slot] = { bpm, beatsPerBar, activeInstrument };
-      setMemories(newMems);
-    } else {
-      const m = memories[slot];
-      if (m) {
-        updateBpm(m.bpm);
-        setBeatsPerBar(m.beatsPerBar);
-        setActiveInstrument(m.activeInstrument);
-      }
-    }
-  };
-
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" || e.code === "Enter") {
-        e.preventDefault();
-        toggleMetronome();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleMetronome]);
-
-  useEffect(() => {
-    if (isPlaying && beat === 0) {
-      requestAnimationFrame(() => {
-        setFlash(true);
-        setTotalMeasures(prev => prev + 1);
-        setTimeout(() => setFlash(false), 100);
-        if (automation.enabled && totalMeasures > 0 && totalMeasures % automation.intervalValue === 0) {
-          const nextBpm = bpm + automation.step;
-          if (nextBpm <= 300) updateBpm(nextBpm);
-        }
-      });
-    }
-  }, [beat, isPlaying, automation, totalMeasures, bpm, updateBpm]);
+    Engine.setTempoRamp({
+      enabled: automation.enabled,
+      targetBpm: automation.targetBpm,
+      step: automation.step,
+      everyBars: automation.intervalValue
+    });
+  }, [automation]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isPlaying) {
       interval = setInterval(() => setSeconds(s => s + 1), 1000);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [isPlaying]);
 
   return (
-    <main className={`flex items-center justify-center min-h-screen transition-colors duration-75 ${flash ? 'bg-cyan-500/15' : 'bg-[#121212]'} p-2 text-white font-sans`}>
-      <div className="bg-[#1e1e1e] w-full max-w-5xl p-4 rounded-3xl shadow-2xl border border-white/5">
+    <main className={`flex items-center justify-center min-h-screen transition-all duration-100 ${flash ? 'bg-cyan-500/20' : 'bg-[#121212]'} p-4 text-white font-sans`}>
+      
+      <style jsx global>{`
+        .tempo-slider {
+          -webkit-appearance: none;
+          width: 100%;
+          height: 10px;
+          background: #00bcd4;
+          border-radius: 5px;
+          outline: none;
+          box-shadow: 0 0 10px rgba(0, 188, 212, 0.5);
+        }
+        .tempo-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 40px;
+          height: 22px;
+          background: #00e5ff;
+          border-radius: 10px;
+          cursor: pointer;
+          border: 1px solid rgba(255, 255, 255, 0.4);
+          box-shadow: 
+            0 0 15px #00e5ff, 
+            inset 0 0 8px rgba(255, 255, 255, 0.8);
+        }
+        .btn-tempo {
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 15px;
+          width: 60px;
+          height: 60px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 32px;
+          font-weight: bold;
+          color: #00e5ff;
+          transition: all 0.2s;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .btn-tempo:active {
+          transform: scale(0.95);
+          box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+      `}</style>
+
+      <div className="bg-[#1e1e1e] w-full max-w-5xl p-6 rounded-[40px] shadow-2xl border border-white/10">
         
         {/* BARRE SUPÉRIEURE */}
-        <div className="flex items-center justify-between mb-4 gap-4 bg-black/20 p-2 px-4 rounded-2xl border border-white/5">
-          <div className="flex-1 max-w-xs">
-            <input type="range" min="10" max="300" value={bpm} onChange={(e) => updateBpm(parseInt(e.target.value))} className="w-full h-1.5 bg-zinc-800 rounded-full appearance-none cursor-pointer accent-cyan-400" />
-          </div>
-          
-          <div className="flex items-center gap-3">
-            <div className="flex gap-2 text-xl">
-              <button onClick={() => setLang("fr")} className={`transition-all hover:scale-110 ${lang === 'fr' ? 'opacity-100' : 'opacity-30 grayscale'}`} title="Français">🇫🇷</button>
-              <button onClick={() => setLang("en")} className={`transition-all hover:scale-110 ${lang === 'en' ? 'opacity-100' : 'opacity-30 grayscale'}`} title="English">🇬🇧</button>
-            </div>
+        <div className="flex items-center justify-between mb-6 gap-6 bg-black/40 p-3 px-6 rounded-2xl border border-white/5">
+          <div className="px-4 mt-6 w-1/2 ml-[20%]">
+             <input 
+                  type="range" 
+                  min="10" 
+                  max="300" 
+                  value={bpm}
+                  onChange={(e) => updateBpm(parseInt(e.target.value))}
+                  className="tempo-slider"
+                />
+              </div>
+
+          <div className="flex gap-3 text-2xl">
+            <button onClick={() => setLang("fr")} className={`transition-all hover:scale-110 ${lang === 'fr' ? 'opacity-100' : 'opacity-20'}`}>🇫🇷</button>
+            <button onClick={() => setLang("en")} className={`transition-all hover:scale-110 ${lang === 'en' ? 'opacity-100' : 'opacity-20'}`}>🇬🇧</button>
           </div>
         </div>
 
-        <div className="grid grid-cols-12 gap-3">
-          
-          {/* COLONNE GAUCHE : SONS */}
-          <div className="col-span-3 bg-black/30 p-3 rounded-2xl border border-white/5">
-            <h3 className="text-[9px] font-black uppercase text-zinc-500 mb-2 tracking-widest text-center">{t.sons}</h3>
-            <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-12 gap-6">
+          {/* COLONNE GAUCHE */}
+          <div className="col-span-3 bg-black/30 p-4 rounded-3xl border border-white/5">
+            <h3 className="text-[10px] font-black uppercase text-zinc-300 mb-4 tracking-widest text-center">{t.sons}</h3>
+            <div className="grid grid-cols-3 gap-2">
               {instruments.map((inst) => (
-                <button key={inst.id} onClick={() => { setActiveInstrument(inst.id); Engine.setSoundType(inst.id); }}
-                  className={`p-2 rounded-lg border transition-all flex flex-col items-center ${activeInstrument === inst.id ? "border-cyan-500 bg-cyan-500/10" : "border-zinc-800 bg-zinc-900/50"}`}>
-                  <span className="text-lg">{inst.icon}</span>
-                  <span className="text-[6px] font-bold uppercase truncate w-full text-center">{inst.name}</span>
+                <button 
+                  key={inst.id} 
+                  onClick={() => { setActiveInstrument(inst.id); Engine.setSoundType(inst.id); }}
+                  className={`p-2 rounded-xl border transition-all flex flex-col items-center gap-1 ${activeInstrument === inst.id ? "border-cyan-500 bg-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.3)]" : "border-zinc-800 bg-zinc-900/50 hover:border-zinc-600"}`}
+                >
+                  <span className="text-xl">{inst.icon}</span>
+                  <span className="text-[7px] font-black uppercase truncate text-zinc-300">{inst.name}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* COLONNE CENTRALE : AFFICHAGE & PLAY */}
-          <div className="col-span-6 flex flex-col gap-3">
-            <div className="bg-black/40 p-6 rounded-[35px] border-2 border-zinc-800 text-center relative">
-              <span className="text-[10px] text-cyan-500 font-black tracking-widest block mb-1 uppercase">{t.tempo}</span>
-              <div className="text-8xl font-black font-mono text-cyan-400 leading-none">
-                {displayBpm}
+          {/* COLONNE CENTRALE */}
+          <div className="col-span-6 flex flex-col gap-4">
+            <div className="flex items-center gap-4">
+              <div className="flex-1 bg-black/60 p-8 rounded-[50px] border-2 border-zinc-800 text-center relative shadow-inner overflow-hidden">
+                <span className="text-[11px] text-cyan-500 font-black tracking-[0.3em] block mb-2 uppercase">{t.tempo}</span>
+                <div className="text-[110px] font-black font-mono text-cyan-400 leading-none drop-shadow-[0_0_20px_rgba(34,211,238,0.4)]">
+                  {displayBpm}
+                </div>
+                <div className="mt-4 text-cyan-400/70 font-mono text-xs font-bold tracking-widest">
+                  {t.delai} <span className="text-white font-mono">{delayMs}</span> ms
+                </div>
               </div>
-              <div className="mt-2 text-cyan-400/60 font-mono text-[10px] uppercase tracking-tighter">
-                {t.delai}: {delayMs}ms
+              
+              {/* BOUTONS + ET - */}
+              <div className="flex flex-col gap-4">
+                <button onClick={() => updateBpm(bpm + 1)} className="btn-tempo">＋</button>
+                <button onClick={() => updateBpm(bpm - 1)} className="btn-tempo">－</button>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-               <div className="bg-zinc-900/60 p-3 rounded-2xl border border-white/5 text-center">
-                  <span className="text-[8px] text-zinc-500 uppercase font-bold block">{t.temps}</span>
-                  <div className="text-2xl font-mono text-green-400">{beat + 1}</div>
+            <div className="grid grid-cols-2 gap-4">
+               <div className="bg-zinc-900/80 p-4 rounded-3xl border border-white/5 text-center">
+                  <span className="text-[10px] text-zinc-300 uppercase font-black block mb-1">{t.temps}</span>
+                  <div className="text-4xl font-mono font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.3)]">
+                    {currentBeatState + 1}
+                  </div>
                </div>
-               <div className="bg-zinc-900/60 p-3 rounded-2xl border border-white/5 text-center">
-                  <span className="text-[8px] text-zinc-500 uppercase font-bold block">{t.mesures}</span>
-                  <div className="text-2xl font-mono text-orange-400">{totalMeasures}</div>
+               <div className="bg-zinc-900/80 p-4 rounded-3xl border border-white/5 text-center">
+                  <span className="text-[10px] text-zinc-300 uppercase font-black block mb-1">{t.mesures}</span>
+                  <div className="text-4xl font-mono font-black text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.3)]">
+                    {totalMeasures}
+                  </div>
                </div>
             </div>
 
-            <button onClick={toggleMetronome} className={`w-full py-4 rounded-2xl transition-all active:scale-95 shadow-lg flex justify-center items-center ${isPlaying ? 'bg-red-600' : 'bg-green-600 hover:bg-green-500'}`}>
+            <button onClick={toggleMetronome} className={`w-full py-6 rounded-[30px] transition-all shadow-2xl flex justify-center items-center ${isPlaying ? 'bg-red-600 hover:bg-red-500 shadow-red-500/20' : 'bg-green-600 hover:bg-green-500 shadow-green-500/20'}`}>
               {isPlaying ? (
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-white"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                <div className="w-10 h-10 bg-white rounded-lg shadow-inner" />
               ) : (
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-white ml-1"><path d="M8 5v14l11-7z" /></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-16 h-16 text-white ml-2 drop-shadow-md">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
               )}
             </button>
           </div>
 
-          {/* COLONNE DROITE : OUTILS */}
-          <div className="col-span-3 space-y-3">
-            <div className="bg-black/50 p-4 rounded-2xl border border-zinc-800 text-center">
-              <span className="text-[8px] text-zinc-500 uppercase font-bold block mb-1">{t.chrono}</span>
-              <div className="text-3xl font-mono text-white tracking-widest bg-zinc-900 rounded-lg py-1 border border-white/5">
+          {/* COLONNE DROITE */}
+          <div className="col-span-3 space-y-4">
+            <div className="bg-black/50 p-5 rounded-3xl border border-zinc-800 text-center shadow-xl">
+              <span className="text-[10px] text-zinc-300 uppercase font-black block mb-2 tracking-widest">{t.chrono}</span>
+              <div className="text-4xl font-mono text-white tracking-tighter bg-zinc-900 rounded-2xl py-2 border border-white/5 shadow-inner">
                 {Math.floor(seconds / 60).toString().padStart(2, '0')}:{(seconds % 60).toString().padStart(2, '0')}
               </div>
+               <div className="pt-2">
+              <VolumeControl onChange={(v) => Engine.setVolume(v)} />
+            </div>
             </div>
 
-            <div className="bg-zinc-900/40 p-3 rounded-2xl border border-white/5">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-[9px] font-bold text-green-500 uppercase">{t.silence}</span>
-                <input type="checkbox" checked={silentMode.enabled} onChange={e => setSilentMode({...silentMode, enabled: e.target.checked})} className="scale-75 accent-green-500" />
+            <div className="bg-zinc-900/60 p-4 rounded-3xl border border-white/5 shadow-lg">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-[11px] font-black text-green-400 uppercase tracking-widest">{t.silence}</span>
+                <button 
+                  onClick={() => setSilentMode(s => ({...s, enabled: !s.enabled}))} 
+                  className={`w-10 h-5 rounded-full relative transition-all border border-white/10 ${silentMode.enabled ? 'bg-green-500' : 'bg-zinc-700'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${silentMode.enabled ? 'left-6' : 'left-1'}`} />
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-1 text-center">
-                <div className="bg-black/40 rounded p-1">
-                  <span className="text-[6px] text-zinc-500 block uppercase">{t.jouees}</span>
-                  <span className="text-[10px] font-bold">{silentMode.audible}</span>
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="bg-black/40 rounded-xl p-2 border border-white/5">
+                  <span className="text-[8px] text-zinc-400 block font-black uppercase mb-1">{t.jouees}</span>
+                  <span className="text-lg font-mono font-black text-white">{silentMode.audible}</span>
                 </div>
-                <div className="bg-black/40 rounded p-1">
-                  <span className="text-[6px] text-zinc-500 block uppercase">{t.muettes}</span>
-                  <span className="text-[10px] font-bold">{silentMode.silent}</span>
+                <div className="bg-black/40 rounded-xl p-2 border border-white/5">
+                  <span className="text-[8px] text-zinc-400 block font-black uppercase mb-1">{t.muettes}</span>
+                  <span className="text-lg font-mono font-black text-white">{silentMode.silent}</span>
                 </div>
               </div>
             </div>
 
-            <div className="bg-zinc-900/40 p-3 rounded-2xl border border-white/5">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-[9px] font-bold text-orange-500 uppercase">{t.automation}</span>
-                <input type="checkbox" checked={automation.enabled} onChange={e => setAutomation({...automation, enabled: e.target.checked})} className="scale-75 accent-orange-500" />
+            <div className="bg-zinc-900/60 p-4 rounded-3xl border border-white/5 shadow-lg">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-[11px] font-black text-orange-400 uppercase tracking-widest">{t.automation}</span>
+                <button 
+                  onClick={() => setAutomation(a => ({...a, enabled: !a.enabled}))}
+                  className={`w-10 h-5 rounded-full relative transition-all border border-white/10 ${automation.enabled ? 'bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.3)]' : 'bg-zinc-700'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${automation.enabled ? 'left-6' : 'left-1'}`} />
+                </button>
               </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-[7px] text-zinc-500 uppercase">{t.cible} : {automation.targetBpm} BPM</span>
-                <input type="range" min="10" max="300" value={automation.targetBpm} onChange={e => setAutomation({...automation, targetBpm: parseInt(e.target.value)})} className="w-full h-1 accent-orange-500" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <span className="text-[8px] text-zinc-300 font-black uppercase block tracking-tighter">Initial</span>
+                  <div className="flex items-center justify-between bg-black/60 rounded-xl p-2 border border-white/10 shadow-inner">
+                    <button onClick={() => updateBpm(bpm - 1)} className="text-zinc-500 hover:text-white px-1 font-bold">-</button>
+                    <span className="text-xs font-mono font-black text-white">{bpm}</span>
+                    <button onClick={() => updateBpm(bpm + 1)} className="text-zinc-500 hover:text-white px-1 font-bold">+</button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[8px] text-zinc-300 font-black uppercase block tracking-tighter">{t.cible}</span>
+                  <div className="flex items-center justify-between bg-black/60 rounded-xl p-2 border border-cyan-500/40 shadow-inner">
+                    <button onClick={() => setAutomation(a => ({...a, targetBpm: Math.max(10, a.targetBpm - 1)}))} className="text-zinc-500 hover:text-white px-1 font-bold">-</button>
+                    <span className="text-xs font-mono font-black text-cyan-400">{automation.targetBpm}</span>
+                    <button onClick={() => setAutomation(a => ({...a, targetBpm: Math.min(300, a.targetBpm + 1)}))} className="text-zinc-500 hover:text-white px-1 font-bold">+</button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[8px] text-zinc-300 font-black uppercase block tracking-tighter">Paliers</span>
+                  <div className="flex items-center justify-between bg-black/60 rounded-xl p-2 border border-white/10 shadow-inner">
+                    <button onClick={() => setAutomation(a => ({...a, step: Math.max(1, a.step - 1)}))} className="text-zinc-500 hover:text-white px-1 font-bold">-</button>
+                    <span className="text-xs font-mono font-black text-white">{automation.step}</span>
+                    <button onClick={() => setAutomation(a => ({...a, step: a.step + 1}))} className="text-zinc-500 hover:text-white px-1 font-bold">+</button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[8px] text-zinc-300 font-black uppercase block tracking-tighter">Mesures</span>
+                  <div className="flex items-center justify-between bg-black/60 rounded-xl p-2 border border-white/10 shadow-inner">
+                    <button onClick={() => setAutomation(a => ({...a, intervalValue: Math.max(1, a.intervalValue - 1)}))} className="text-zinc-500 hover:text-white px-1 font-bold">-</button>
+                    <span className="text-xs font-mono font-black text-white">{automation.intervalValue}</span>
+                    <button onClick={() => setAutomation(a => ({...a, intervalValue: a.intervalValue + 1}))} className="text-zinc-500 hover:text-white px-1 font-bold">+</button>
+                  </div>
+                </div>
               </div>
             </div>
-
-            <VolumeControl onChange={(v) => Engine.setVolume(v)} />
           </div>
         </div>
       </div>

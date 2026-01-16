@@ -1,4 +1,4 @@
-// audio/metronomeEngine.ts
+"use client";
 
 declare global {
   interface Window {
@@ -13,14 +13,20 @@ let isPlaying = false;
 let tempo = 120;
 let currentSoundType = "elec_1";
 
-const lookahead = 25.0; // ms
-const scheduleAheadTime = 0.1; // secondes
+const lookahead = 25.0; 
+const scheduleAheadTime = 0.1; 
 let timerID: number | null = null;
 
 export type Subdivision = "quarter" | "eighth" | "triplet";
-let subdivision: Subdivision = "quarter";
-let subdivisionIndex = 0;
 
+// Regroupement des paramètres modifiables dans un objet constant
+// Cela règle les erreurs ESLint 'prefer-const' et centralise la configuration
+const settings = {
+  beatsPerBar: 4,
+  subdivision: "quarter" as Subdivision
+};
+
+let subdivisionIndex = 0;
 let tempoRamp: {
   enabled: boolean;
   targetBpm: number;
@@ -30,7 +36,6 @@ let tempoRamp: {
 
 let barCount = 0;
 let currentBeat = 0;
-let beatsPerBar = 4;
 
 const beatListeners = new Set<(beat: number, isAccent: boolean, currentBpm: number) => void>();
 
@@ -38,7 +43,6 @@ function initAudio() {
   if (!audioContext) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContextClass();
-    
     masterGain = audioContext.createGain();
     masterGain.gain.value = 0.5;
     masterGain.connect(audioContext.destination);
@@ -62,29 +66,22 @@ function playClick(time: number, type: "normal" | "accent" | "cue") {
     elec_2: { freq: 880, wave: "square", decay: 0.03 },
     elec_3: { freq: 1200, wave: "sine", decay: 0.02 },
     elec_4: { freq: 600, wave: "triangle", decay: 0.08 },
-    elec_5: { freq: 1500, wave: "sine", decay: 0.01 },
     mech_1: { freq: 400, wave: "triangle", decay: 0.1 }, 
     mech_2: { freq: 350, wave: "sine", decay: 0.15 },
-    mech_3: { freq: 450, wave: "triangle", decay: 0.12 },
     cowbell: { freq: 800, wave: "square", decay: 0.2 },
     conga: { freq: 200, wave: "sine", decay: 0.2 },
     woodblock: { freq: 2200, wave: "sine", decay: 0.03 },
     clave: { freq: 3200, wave: "sine", decay: 0.02 },
     sticks: { freq: 4000, wave: "sine", decay: 0.01 },
-    cymbal: { freq: 8000, wave: "sine", decay: 0.05 },
-    tambourine: { freq: 6000, wave: "sine", decay: 0.04 },
     kick: { freq: 200, wave: "sine", decay: 0.2 },
   };
 
   const preset = synthPresets[currentSoundType] || synthPresets.elec_1;
-  
   let finalFreq = preset.freq;
   if (type === "accent") finalFreq *= 1.5;
   if (type === "cue") finalFreq *= 0.8; 
 
   osc.type = preset.wave;
-
-  // Effet de "Pitch Drop" pour le Kick (indispensable pour la percussion)
   if (currentSoundType === "kick") {
     osc.frequency.setValueAtTime(finalFreq * 2, time);
     osc.frequency.exponentialRampToValueAtTime(finalFreq, time + 0.05);
@@ -92,21 +89,20 @@ function playClick(time: number, type: "normal" | "accent" | "cue") {
     osc.frequency.setValueAtTime(finalFreq, time);
   }
 
-  // Enveloppe de volume
   clickGain.gain.setValueAtTime(0, time);
   clickGain.gain.linearRampToValueAtTime(1, time + 0.002); 
   clickGain.gain.exponentialRampToValueAtTime(0.001, time + preset.decay);
 
   osc.connect(clickGain);
   clickGain.connect(masterGain);
-
   osc.start(time);
   osc.stop(time + preset.decay + 0.01); 
 }
 
 function nextNote() {
   const secondsPerBeat = 60.0 / tempo;
-  const notesPerBeat = subdivision === "eighth" ? 2 : subdivision === "triplet" ? 3 : 1;
+  // Correction : subdivision -> settings.subdivision
+  const notesPerBeat = settings.subdivision === "eighth" ? 2 : settings.subdivision === "triplet" ? 3 : 1;
   const secondsPerNote = secondsPerBeat / notesPerBeat;
 
   nextNoteTime += secondsPerNote;
@@ -116,11 +112,12 @@ function nextNote() {
     subdivisionIndex = 0;
     currentBeat++;
     
-    if (currentBeat >= beatsPerBar) {
+    // Correction : beatsPerBar -> settings.beatsPerBar
+    if (currentBeat >= settings.beatsPerBar) {
       currentBeat = 0;
       barCount++;
       
-      if (tempoRamp?.enabled && barCount % tempoRamp.everyBars === 0) {
+      if (tempoRamp?.enabled && barCount > 0 && barCount % tempoRamp.everyBars === 0) {
         if (tempo < tempoRamp.targetBpm) {
           tempo = Math.min(tempo + tempoRamp.step, tempoRamp.targetBpm);
         } else if (tempo > tempoRamp.targetBpm) {
@@ -136,8 +133,9 @@ function scheduler() {
   while (nextNoteTime < ctx.currentTime + scheduleAheadTime) {
     let clickType: "normal" | "accent" | "cue" = "normal";
     const isAccent = currentBeat === 0 && subdivisionIndex === 0;
-    const isChangeMeasure = tempoRamp?.enabled && (barCount + 1) % tempoRamp.everyBars === 0;
-    const isCueBeat = isChangeMeasure && (beatsPerBar - currentBeat) <= 1 && subdivisionIndex === 0;
+    const isChangeMeasureSoon = tempoRamp?.enabled && (barCount + 1) % tempoRamp.everyBars === 0;
+    // Correction : beatsPerBar -> settings.beatsPerBar
+    const isCueBeat = isChangeMeasureSoon && (settings.beatsPerBar - currentBeat) <= 1 && subdivisionIndex === 0;
 
     if (isCueBeat) clickType = "cue";
     else if (isAccent) clickType = "accent";
@@ -148,7 +146,18 @@ function scheduler() {
   }
 }
 
-// --- EXPORTS ---
+// --- Fonctions d'export pour modifier les réglages ---
+
+export function setTimeSignature(beats: number) {
+  settings.beatsPerBar = beats;
+  if (currentBeat >= beats) currentBeat = 0;
+}
+
+export function setSubdivision(val: Subdivision) {
+  settings.subdivision = val;
+  subdivisionIndex = 0;
+}
+
 export function setVolume(value: number) {
   initAudio();
   if (masterGain && audioContext) {
@@ -156,23 +165,19 @@ export function setVolume(value: number) {
   }
 }
 
-export function setSoundType(type: string) {
-  currentSoundType = type;
-}
+export function setSoundType(type: string) { currentSoundType = type; }
 
 export async function startMetronome(bpm: number) {
   if (isPlaying) return;
   initAudio();
   const ctx = getAudioContext();
   if (ctx.state === 'suspended') await ctx.resume();
-  
   tempo = bpm; 
   currentBeat = 0;
   subdivisionIndex = 0;
   barCount = 0;
   nextNoteTime = ctx.currentTime + 0.05;
   isPlaying = true;
-
   if (timerID) window.clearInterval(timerID);
   timerID = window.setInterval(() => scheduler(), lookahead);
 }
@@ -186,15 +191,14 @@ export function stopMetronome() {
 }
 
 export function setTempo(bpm: number) { tempo = bpm; }
-export function setTimeSignature(beats: number) { 
-  beatsPerBar = beats; 
-  if (currentBeat >= beats) currentBeat = 0;
-}
-export function setSubdivision(value: Subdivision) { subdivision = value; }
+
 export function setTempoRamp(ramp: { enabled: boolean; targetBpm: number; step: number; everyBars: number; } | null) {
   tempoRamp = ramp;
 }
+
 export function onBeat(callback: (beat: number, isAccent: boolean, currentBpm: number) => void) {
   beatListeners.add(callback);
-  return () => beatListeners.delete(callback);
+  return () => {
+    beatListeners.delete(callback);
+  };
 }
