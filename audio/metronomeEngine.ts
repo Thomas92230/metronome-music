@@ -17,8 +17,9 @@ const lookahead = 25.0;
 const scheduleAheadTime = 0.1; 
 let timerID: number | null = null;
 
-// --- NOUVELLES SUBDIVISIONS ---
-// On définit pour chaque ID le nombre de divisions du temps et quelles divisions déclenchent un son
+// État pour le mode silence
+let silentMode = { enabled: false, audible: 2, silent: 2 };
+
 export type Subdivision = 
   | "quarter" | "eighth" | "triplet" | "sixteenth" 
   | "1e2d" | "2d1e" | "shuffle" | "1-4-16" 
@@ -26,22 +27,22 @@ export type Subdivision =
   | "quintolet" | "sextolet" | "septolet" | "trinaire";
 
 const SUBDIVISION_PATTERNS: Record<Subdivision, { divisions: number; pattern: number[] }> = {
-  "quarter":    { divisions: 1, pattern: [1] },
-  "eighth":     { divisions: 2, pattern: [1, 1] },
-  "triplet":    { divisions: 3, pattern: [1, 1, 1] },
-  "sixteenth":  { divisions: 4, pattern: [1, 1, 1, 1] },
-  "1e2d":       { divisions: 4, pattern: [1, 0, 1, 1] }, // Croche deux doubles
-  "2d1e":       { divisions: 4, pattern: [1, 1, 1, 0] }, // Deux doubles croche
-  "shuffle":    { divisions: 3, pattern: [1, 0, 1] },    // Triolet de noires (1ere et 3eme)
-  "1-4-16":     { divisions: 4, pattern: [1, 0, 0, 1] }, // 1ere et 4eme double
-  "offbeat":    { divisions: 2, pattern: [0, 1] },       // Contretemps
-  "2-4-16":     { divisions: 4, pattern: [0, 1, 0, 1] }, // 2eme et 4eme double
-  "2-3-trip":   { divisions: 3, pattern: [0, 1, 1] },    // 2eme et 3eme du triolet
-  "3-4-16":     { divisions: 4, pattern: [0, 0, 1, 1] }, // 3eme et 4eme double
-  "quintolet":  { divisions: 5, pattern: [1, 1, 1, 1, 1] },
-  "sextolet":   { divisions: 6, pattern: [1, 1, 1, 1, 1, 1] },
-  "septolet":   { divisions: 7, pattern: [1, 1, 1, 1, 1, 1, 1] },
-  "trinaire":   { divisions: 6, pattern: [1, 0, 1, 0, 1, 0] }, // 3 croches (binaire ressenti trinaire)
+  "quarter":     { divisions: 1, pattern: [1] },
+  "eighth":      { divisions: 2, pattern: [1, 1] },
+  "triplet":     { divisions: 3, pattern: [1, 1, 1] },
+  "sixteenth":   { divisions: 4, pattern: [1, 1, 1, 1] },
+  "1e2d":        { divisions: 4, pattern: [1, 0, 1, 1] },
+  "2d1e":        { divisions: 4, pattern: [1, 1, 1, 0] },
+  "shuffle":     { divisions: 3, pattern: [1, 0, 1] },
+  "1-4-16":      { divisions: 4, pattern: [1, 0, 0, 1] },
+  "offbeat":     { divisions: 2, pattern: [0, 1] },
+  "2-4-16":      { divisions: 4, pattern: [0, 1, 0, 1] },
+  "2-3-trip":    { divisions: 3, pattern: [0, 1, 1] },
+  "3-4-16":      { divisions: 4, pattern: [0, 0, 1, 1] },
+  "quintolet":   { divisions: 5, pattern: [1, 1, 1, 1, 1] },
+  "sextolet":    { divisions: 6, pattern: [1, 1, 1, 1, 1, 1] },
+  "septolet":    { divisions: 7, pattern: [1, 1, 1, 1, 1, 1, 1] },
+  "trinaire":    { divisions: 6, pattern: [1, 0, 1, 0, 1, 0] },
 };
 
 const settings = {
@@ -121,8 +122,6 @@ function playClick(time: number, type: "normal" | "accent" | "cue") {
 function nextNote() {
   const secondsPerBeat = 60.0 / tempo;
   const subConfig = SUBDIVISION_PATTERNS[settings.subdivision];
-  
-  // Le temps est divisé par le nombre de divisions de la subdivision choisie
   const secondsPerNote = secondsPerBeat / subConfig.divisions;
 
   nextNoteTime += secondsPerNote;
@@ -136,7 +135,6 @@ function nextNote() {
       currentBeat = 0;
       barCount++;
       
-      // Gestion de l'automation du tempo
       if (tempoRamp?.enabled && barCount > 0 && barCount % tempoRamp.everyBars === 0) {
         if (tempo < tempoRamp.targetBpm) {
           tempo = Math.min(tempo + tempoRamp.step, tempoRamp.targetBpm);
@@ -153,27 +151,41 @@ function scheduler() {
   while (nextNoteTime < ctx.currentTime + scheduleAheadTime) {
     const subConfig = SUBDIVISION_PATTERNS[settings.subdivision];
     
-    // On ne joue le son que si le pattern à cet index vaut 1
     if (subConfig.pattern[subdivisionIndex] === 1) {
       let clickType: "normal" | "accent" | "cue" = "normal";
-      
       const isFirstOfMeasure = currentBeat === 0 && subdivisionIndex === 0;
+      
+      // Calcul du silence
+      let shouldMute = false;
+      if (silentMode.enabled) {
+        const cycleTotal = silentMode.audible + silentMode.silent;
+        const currentPosInCycle = barCount % cycleTotal;
+        if (currentPosInCycle >= silentMode.audible) {
+          shouldMute = true;
+        }
+      }
+
       const isChangeMeasureSoon = tempoRamp?.enabled && (barCount + 1) % tempoRamp.everyBars === 0;
       const isCueBeat = isChangeMeasureSoon && (settings.beatsPerBar - currentBeat) <= 1 && subdivisionIndex === 0;
 
       if (isCueBeat) clickType = "cue";
       else if (isFirstOfMeasure) clickType = "accent";
 
-      // On notifie l'UI (le flash ne se déclenche que sur subdivisionIndex 0)
+      // Notifier l'UI même si c'est muet (pour garder le flash visuel)
       beatListeners.forEach((listener) => listener(currentBeat, isFirstOfMeasure, tempo));
-      playClick(nextNoteTime, clickType);
+      
+      // Jouer le son uniquement si non muet
+      if (!shouldMute) {
+        playClick(nextNoteTime, clickType);
+      }
     }
-
     nextNote();
   }
 }
 
-// --- Fonctions d'export ---
+export function setSilentMode(config: { enabled: boolean; audible: number; silent: number }) {
+  silentMode = config;
+}
 
 export function setTimeSignature(beats: number) {
   settings.beatsPerBar = beats;

@@ -7,17 +7,16 @@ import { VolumeControl } from "../components/Volume.Control";
 
 // ==========================================================
 // --- HOOK POUR LE DÉFILEMENT RAPIDE (LONG PRESS) ---
-// Gère l'incrémentation continue quand on reste appuyé sur +/-
 // ==========================================================
 function useLongPress(callback: () => void, ms = 150) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const start = useCallback(() => {
-    callback(); // Exécute une fois au clic immédiat
+    callback();
     timerRef.current = setTimeout(() => {
       intervalRef.current = setInterval(() => {
-        callback(); // Puis en boucle toutes les 50ms après un délai initial
+        callback();
       }, 50);
     }, 500);
   }, [callback]);
@@ -32,7 +31,6 @@ function useLongPress(callback: () => void, ms = 150) {
 
 // ==========================================================
 // --- MOTEUR DE RENDU DES ICÔNES SVG ---
-// Génère visuellement les figures de notes (noires, croches, etc.)
 // ==========================================================
 const NoteIcon = ({ id, active }: { id: string; active: boolean }) => {
   const color = active ? "#f97316" : "#22d3ee"; 
@@ -95,7 +93,6 @@ const NoteIcon = ({ id, active }: { id: string; active: boolean }) => {
 
 // ==========================================================
 // --- DONNÉES ET CONFIGURATION ---
-// Traductions, listes d'instruments et subdivisions
 // ==========================================================
 interface SavedTrack { id: number; name: string; bpm: number; instrument: string; }
 
@@ -140,7 +137,6 @@ type SubdivisionId = typeof noteSubdivisions[number]["id"];
 // --- COMPOSANT PRINCIPAL ---
 // ==========================================================
 export default function MetronomePro() {
-  // --- ÉTATS (STATE) ---
   const [lang, setLang] = useState<"fr" | "en">("fr");
   const t = translations[lang];
 
@@ -150,24 +146,20 @@ export default function MetronomePro() {
   const [activeSub, setActiveSub] = useState<SubdivisionId>("quarter");
   const [seconds, setSeconds] = useState(0);
   const [totalMeasures, setTotalMeasures] = useState(0);
-  const [flash, setFlash] = useState(false); // Effet visuel au temps 1
+  const [flash, setFlash] = useState(false);
   const [currentBeatState, setCurrentBeatState] = useState(0);
   
-  // Paramètres modes spéciaux
   const [silentMode, setSilentMode] = useState({ enabled: false, audible: 2, silent: 2 });
   const [automation, setAutomation] = useState({ enabled: false, targetBpm: 160, intervalValue: 4, step: 5 });
 
-  // Gestion des pistes sauvegardées
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [trackName, setTrackName] = useState("");
   const [savedTracks, setSavedTracks] = useState<SavedTrack[]>([]);
 
-  // Hook externe pour la logique audio synchronisée
   const { currentBpm } = useMetronome();
   const displayBpm = isPlaying ? Math.round(currentBpm) : bpm;
   const delayMs = (60000 / displayBpm).toFixed(2);
 
-  // --- HANDLERS DÉFILEMENT (Long Press sur les boutons +/-) ---
   const handleAudiblePlus = useLongPress(() => setSilentMode(s => ({...s, audible: s.audible + 1})));
   const handleAudibleMinus = useLongPress(() => setSilentMode(s => ({...s, audible: Math.max(1, s.audible - 1)})));
   const handleSilentPlus = useLongPress(() => setSilentMode(s => ({...s, silent: s.silent + 1})));
@@ -180,9 +172,13 @@ export default function MetronomePro() {
   const handleIntervalPlus = useLongPress(() => setAutomation(a => ({...a, intervalValue: a.intervalValue + 1})));
   const handleIntervalMinus = useLongPress(() => setAutomation(a => ({...a, intervalValue: Math.max(1, a.intervalValue - 1)})));
 
-  // --- EFFETS (SIDE EFFECTS) ---
+  // --- EFFETS ---
   
-  // Écoute les événements du moteur audio (Beat / Flash)
+  // Synchronise le Mode Silence avec le moteur audio
+  useEffect(() => {
+    Engine.setSilentMode(silentMode);
+  }, [silentMode]);
+
   useEffect(() => {
     const unsubscribe = Engine.onBeat((beat, isAccent) => {
       setCurrentBeatState(beat);
@@ -197,14 +193,12 @@ export default function MetronomePro() {
     return () => unsubscribe();
   }, []);
 
-  // Met à jour le tempo dans le moteur audio
   const updateBpm = useCallback((val: number) => {
     const newBpm = Math.min(Math.max(val, 10), 300);
     setBpm(newBpm);
     Engine.setTempo(newBpm);
   }, []);
 
-  // Démarre / Arrête le métronome
   const toggleMetronome = useCallback(async () => {
     if (isPlaying) { 
       Engine.stopMetronome(); 
@@ -217,7 +211,6 @@ export default function MetronomePro() {
     }
   }, [isPlaying, bpm]);
 
-  // Sauvegarde une configuration de piste
   const handleConfirmSave = () => {
     if (trackName.trim()) {
       const newTrack = { id: Date.now(), name: trackName, bpm: bpm, instrument: activeInstrument };
@@ -232,7 +225,6 @@ export default function MetronomePro() {
     setSavedTracks(savedTracks.filter(t => t.id !== id));
   };
 
-  // Synchronise l'automation avec le moteur audio
   useEffect(() => {
     Engine.setTempoRamp({ 
       enabled: automation.enabled, 
@@ -242,7 +234,6 @@ export default function MetronomePro() {
     });
   }, [automation]);
 
-  // Gestion du chrono (Timer)
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (isPlaying) { 
@@ -254,7 +245,6 @@ export default function MetronomePro() {
   return (
     <main className={`flex items-center justify-center min-h-screen transition-all duration-100 ${flash ? 'bg-cyan-500/20' : 'bg-[#121212]'} p-4 text-white font-sans`}>
       
-      {/* --- STYLES CSS LOCAUX --- */}
       <style jsx global>{`
         .tempo-slider { -webkit-appearance: none; width: 100%; height: 10px; background: #00bcd4; border-radius: 5px; outline: none; }
         .tempo-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 40px; height: 22px; background: #00e5ff; border-radius: 10px; cursor: pointer; box-shadow: 0 0 15px #00e5ff; transition: transform 0.1s; }
@@ -266,7 +256,6 @@ export default function MetronomePro() {
         .tracks-scrollbar::-webkit-scrollbar-thumb { background: #00bcd4; border-radius: 10px; }
       `}</style>
 
-      {/* --- MODALE DE SAUVEGARDE --- */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[#1e1e1e] border border-white/10 p-8 rounded-[30px] w-full max-w-md shadow-2xl">
@@ -280,10 +269,8 @@ export default function MetronomePro() {
         </div>
       )}
 
-      {/* --- INTERFACE PRINCIPALE --- */}
       <div className="bg-[#1e1e1e] w-full max-w-5xl p-6 rounded-[40px] shadow-2xl border border-white/10">
         
-        {/* Barre du haut : Slider Tempo + Langues */}
         <div className="flex items-center justify-between mb-6 gap-6 bg-black/40 p-3 px-6 rounded-2xl border border-white/5">
           <div className="px-4 mt-6 w-1/2 ml-[20%]">
              <input type="range" min="10" max="300" value={bpm} onChange={(e) => updateBpm(parseInt(e.target.value))} className="tempo-slider" />
@@ -295,7 +282,6 @@ export default function MetronomePro() {
         </div>
 
         <div className="grid grid-cols-12 gap-6">
-          {/* COLONNE GAUCHE : SONS & NOTES */}
           <div className="col-span-3 flex flex-col gap-4">
             <div className="bg-black/30 p-4 rounded-3xl border border-white/5">
               <h3 className="text-[10px] font-black uppercase text-zinc-300 mb-4 tracking-widest text-center">{t.sons}</h3>
@@ -320,10 +306,8 @@ export default function MetronomePro() {
             </div>
           </div>
 
-          {/* COLONNE CENTRALE : AFFICHAGE BPM & CONTRÔLES PRINCIPAUX */}
           <div className="col-span-6 flex flex-col gap-4">
             <div className="flex items-center gap-4">
-              {/* Écran Tempo */}
               <div className="flex-1 bg-black/60 p-8 rounded-[50px] border-2 border-zinc-800 text-center shadow-inner overflow-hidden">
                 <span className="text-[11px] text-cyan-500 font-black tracking-[0.3em] block mb-2 uppercase">{t.tempo}</span>
                 <div className="text-[110px] font-black font-mono text-cyan-400 leading-none">{displayBpm}</div>
@@ -335,7 +319,6 @@ export default function MetronomePro() {
               </div>
             </div>
 
-            {/* Compteurs de temps et mesures */}
             <div className="grid grid-cols-2 gap-4">
                 <div className="bg-zinc-900/80 p-4 rounded-3xl border border-white/5 text-center">
                   <span className="text-[10px] text-zinc-300 uppercase font-black block mb-1">{t.temps}</span>
@@ -347,7 +330,6 @@ export default function MetronomePro() {
                 </div>
             </div>
 
-            {/* Boutons Play & Save */}
             <div className="flex gap-4">
               <button onClick={toggleMetronome} className={`flex-1 py-6 rounded-[30px] flex justify-center items-center transition-all hover:brightness-110 active:scale-95 ${isPlaying ? 'bg-red-600 shadow-lg shadow-red-900/20' : 'bg-green-600 shadow-lg shadow-green-900/20'}`}>
                 {isPlaying ? <div className="w-10 h-10 bg-white rounded-lg" /> : <svg viewBox="0 0 24 24" fill="currentColor" className="w-16 h-16 text-white ml-2"><path d="M8 5v14l11-7z" /></svg>}
@@ -357,7 +339,6 @@ export default function MetronomePro() {
               </button>
             </div>
 
-            {/* Liste des pistes sauvegardées */}
             <div className="mt-2 bg-black/20 rounded-3xl p-4 border border-white/5">
               <span className="text-[9px] font-black text-zinc-500 uppercase block mb-3 pl-2">{t.pistes}</span>
               <div className="flex gap-3 overflow-x-visible tracks-scrollbar pb-3 px-2">
@@ -377,16 +358,13 @@ export default function MetronomePro() {
             </div>
           </div>
 
-          {/* COLONNE DROITE : CHRONO, SILENCE & AUTOMATION */}
           <div className="col-span-3 space-y-4">
-            {/* Chrono & Volume */}
             <div className="bg-black/50 p-5 rounded-3xl border border-zinc-800 text-center">
               <span className="text-[10px] text-zinc-300 uppercase font-black block mb-2">{t.chrono}</span>
               <div className="text-4xl font-mono text-white bg-zinc-900 rounded-2xl py-2">{Math.floor(seconds / 60).toString().padStart(2, '0')}:{(seconds % 60).toString().padStart(2, '0')}</div>
               <div className="pt-2"><VolumeControl onChange={(v) => Engine.setVolume(v)} /></div>
             </div>
             
-            {/* Mode Silence (Audible / Muet) */}
             <div className="bg-zinc-900/60 p-4 rounded-3xl border border-white/5">
               <div className="flex justify-between items-center mb-4"><span className="text-[11px] font-black text-green-400 uppercase">{t.silence}</span><button onClick={() => setSilentMode(s => ({...s, enabled: !s.enabled}))} className={`w-10 h-5 rounded-full relative transition-colors ${silentMode.enabled ? 'bg-green-500' : 'bg-zinc-700'}`}><div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${silentMode.enabled ? 'left-6' : 'left-1'}`} /></button></div>
               <div className="grid grid-cols-2 gap-2">
@@ -409,7 +387,6 @@ export default function MetronomePro() {
               </div>
             </div>
 
-            {/* Mode Automation (Ramp) */}
             <div className="bg-zinc-900/60 p-4 rounded-3xl border border-white/5">
               <div className="flex justify-between items-center mb-4"><span className="text-[11px] font-black text-orange-400 uppercase">{t.automation}</span><button onClick={() => setAutomation(a => ({...a, enabled: !a.enabled}))} className={`w-10 h-5 rounded-full relative transition-colors ${automation.enabled ? 'bg-orange-500' : 'bg-zinc-700'}`}><div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${automation.enabled ? 'left-6' : 'left-1'}`} /></button></div>
               <div className="grid grid-cols-2 gap-3">
