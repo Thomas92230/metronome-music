@@ -275,9 +275,25 @@ export default function MetronomePro() {
           <div className="px-4 mt-6 w-1/2 ml-[20%]">
              <input type="range" min="10" max="300" value={bpm} onChange={(e) => updateBpm(parseInt(e.target.value))} className="tempo-slider" />
           </div>
-          <div className="flex gap-3 text-2xl">
-            <button onClick={() => setLang("fr")} className={`transition-all hover:scale-110 ${lang === 'fr' ? 'opacity-100' : 'opacity-20'}`}>🇫🇷</button>
-            <button onClick={() => setLang("en")} className={`transition-all hover:scale-110 ${lang === 'en' ? 'opacity-100' : 'opacity-20'}`}>🇬🇧</button>
+          <div className="flex gap-4 items-center">
+            {/* DRAPEAU FRANCAIS SVG */}
+            <button onClick={() => setLang("fr")} className={`transition-all hover:scale-110 overflow-hidden rounded-sm w-8 h-6 flex shadow-sm ${lang === 'fr' ? 'ring-2 ring-cyan-400 opacity-100' : 'opacity-40'}`}>
+              <div className="w-1/3 h-full bg-[#002395]"></div>
+              <div className="w-1/3 h-full bg-white"></div>
+              <div className="w-1/3 h-full bg-[#ED2939]"></div>
+            </button>
+            
+            {/* DRAPEAU ANGLAIS (UK) SVG */}
+            <button onClick={() => setLang("en")} className={`transition-all hover:scale-110 overflow-hidden rounded-sm w-8 h-6 flex shadow-sm ${lang === 'en' ? 'ring-2 ring-cyan-400 opacity-100' : 'opacity-40'}`}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 30" className="w-full h-full">
+                <clipPath id="s"><path d="M0,0 v30 h60 v-30 z"/></clipPath>
+                <path d="M0,0 v30 h60 v-30 z" fill="#012169"/>
+                <path d="M0,0 L60,30 M60,0 L0,30" stroke="#fff" strokeWidth="6"/>
+                <path d="M0,0 L60,30 M60,0 L0,30" stroke="#C8102E" strokeWidth="4"/>
+                <path d="M30,0 v30 M0,15 h60" stroke="#fff" strokeWidth="10"/>
+                <path d="M30,0 v30 M0,15 h60" stroke="#C8102E" strokeWidth="6"/>
+              </svg>
+            </button>
           </div>
         </div>
 
