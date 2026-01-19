@@ -6,34 +6,51 @@ import { useMetronome } from "../hooks/useMetronome";
 import { VolumeControl } from "../components/Volume.Control";
 
 // ==========================================================
-// --- HOOK POUR LE DÉFILEMENT RAPIDE (LONG PRESS) ---
+// --- UTILS & HOOKS ---
 // ==========================================================
-function useLongPress(callback: () => void, ms = 150) {
+
+function useLongPress(callback: () => void) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const callbackRef = useRef(callback);
+
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
 
   const start = useCallback(() => {
-    callback();
+    callbackRef.current(); 
+
     timerRef.current = setTimeout(() => {
-      intervalRef.current = setInterval(() => {
-        callback();
-      }, 50);
-    }, 500);
-  }, [callback]);
+      let speed = 150;
+      const run = () => {
+        callbackRef.current();
+        speed = Math.max(30, speed * 0.85);
+        intervalRef.current = setTimeout(run, speed);
+      };
+      run();
+    }, 400);
+  }, []);
 
   const stop = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (intervalRef.current) clearTimeout(intervalRef.current);
   }, []);
 
-  return { onMouseDown: start, onMouseUp: stop, onMouseLeave: stop, onTouchStart: start, onTouchEnd: stop };
+  return {
+    onMouseDown: start,
+    onMouseUp: stop,
+    onMouseLeave: stop,
+    onTouchStart: start,
+    onTouchEnd: stop,
+  };
 }
 
 // ==========================================================
-// --- MOTEUR DE RENDU DES ICÔNES SVG ---
+// --- COMPOSANTS GRAPHIQUES (SVG) ---
 // ==========================================================
 const NoteIcon = ({ id, active }: { id: string; active: boolean }) => {
-  const color = active ? "#f97316" : "#22d3ee"; 
+  const color = active ? "#f97316" : "#22d3ee";
   const strokeWidth = 2.5;
   return (
     <svg viewBox="0 0 40 40" className="w-8 h-8 transition-colors duration-200" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -92,7 +109,7 @@ const NoteIcon = ({ id, active }: { id: string; active: boolean }) => {
 };
 
 // ==========================================================
-// --- DONNÉES ET CONFIGURATION ---
+// --- CONSTANTES & TRADUCTIONS ---
 // ==========================================================
 interface SavedTrack { id: number; name: string; bpm: number; instrument: string; }
 
@@ -103,7 +120,8 @@ const translations = {
     jouees: "JOUÉES", muettes: "MUETTES", automation: "AUTOMATION",
     cible: "CIBLE", saveTitle: "ENREGISTRER LA PISTE", 
     placeholder: "Nom de la piste...", cancel: "ANNULER", save: "VALIDER",
-    pistes: "MES PISTES", notes: "NOTES"
+    pistes: "MES PISTES", notes: "NOTES",
+    tempsParMesure: "Temps par mesure", decompte: "Décompte (mesures)"
   },
   en: {
     sons: "SOUNDS", tempo: "TEMPO", delai: "Delay", temps: "BEAT",
@@ -111,7 +129,8 @@ const translations = {
     jouees: "PLAYED", muettes: "MUTED", automation: "AUTOMATION",
     cible: "TARGET", saveTitle: "SAVE TRACK", 
     placeholder: "Track name...", cancel: "CANCEL", save: "SAVE",
-    pistes: "MY TRACKS", notes: "NOTES"
+    pistes: "MY TRACKS", notes: "NOTES",
+    tempsParMesure: "Beats per measure", decompte: "Countdown (measures)"
   }
 };
 
@@ -124,14 +143,12 @@ const instruments = [
   { id: "sticks", name: "Bag", icon: "🥢" }, { id: "kick", name: "Kic", icon: "🥁" },
 ];
 
-const noteSubdivisions = [
+const noteSubdivisions: { id: Engine.Subdivision }[] = [
   { id: "quarter" }, { id: "eighth" }, { id: "triplet" }, { id: "sixteenth" },
   { id: "1e2d" }, { id: "2d1e" }, { id: "shuffle" }, { id: "1-4-16" },
   { id: "offbeat" }, { id: "2-4-16" }, { id: "2-3-trip" }, { id: "3-4-16" },
   { id: "quintolet" }, { id: "sextolet" }, { id: "septolet" }, { id: "trinaire" },
-] as const;
-
-type SubdivisionId = typeof noteSubdivisions[number]["id"];
+];
 
 // ==========================================================
 // --- COMPOSANT PRINCIPAL ---
@@ -143,12 +160,16 @@ export default function MetronomePro() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [bpm, setBpm] = useState(120);
   const [activeInstrument, setActiveInstrument] = useState("elec_1");
-  const [activeSub, setActiveSub] = useState<SubdivisionId>("quarter");
+  const [activeSub, setActiveSub] = useState<Engine.Subdivision>("quarter");
   const [seconds, setSeconds] = useState(0);
   const [totalMeasures, setTotalMeasures] = useState(0);
   const [flash, setFlash] = useState(false);
   const [currentBeatState, setCurrentBeatState] = useState(0);
   
+  // --- NOUVEAUX ÉTATS ---
+  const [beatsPerMeasure, setBeatsPerMeasure] = useState(4);
+  const [countdownMeasures, setCountdownMeasures] = useState(0);
+
   const [silentMode, setSilentMode] = useState({ enabled: false, audible: 2, silent: 2 });
   const [automation, setAutomation] = useState({ enabled: false, targetBpm: 160, intervalValue: 4, step: 5 });
 
@@ -158,13 +179,38 @@ export default function MetronomePro() {
 
   const { currentBpm } = useMetronome();
   const displayBpm = isPlaying ? Math.round(currentBpm) : bpm;
-  const delayMs = (60000 / displayBpm).toFixed(2);
+  const delayMs = (60000 / (displayBpm || 1)).toFixed(2);
+
+  // --- LOGIQUE MÉTIER ---
+  const updateBpm = useCallback((val: number) => {
+    const newBpm = Math.min(Math.max(val, 10), 300);
+    setBpm(newBpm);
+    Engine.setTempo(newBpm);
+  }, []);
+
+  const handleBpmPlus = useLongPress(() => updateBpm(bpm + 1));
+  const handleBpmMinus = useLongPress(() => updateBpm(bpm - 1));
+  
+  // Handlers pour Temps par mesure
+  const handleBeatsPlus = useLongPress(() => {
+    const newVal = Math.min(32, beatsPerMeasure + 1);
+    setBeatsPerMeasure(newVal);
+    Engine.setBeatsPerMeasure?.(newVal);
+  });
+  const handleBeatsMinus = useLongPress(() => {
+    const newVal = Math.max(1, beatsPerMeasure - 1);
+    setBeatsPerMeasure(newVal);
+    Engine.setBeatsPerMeasure?.(newVal);
+  });
+
+  // Handlers pour Décompte
+  const handleCountdownPlus = useLongPress(() => setCountdownMeasures(prev => Math.min(16, prev + 1)));
+  const handleCountdownMinus = useLongPress(() => setCountdownMeasures(prev => Math.max(0, prev - 1)));
 
   const handleAudiblePlus = useLongPress(() => setSilentMode(s => ({...s, audible: s.audible + 1})));
   const handleAudibleMinus = useLongPress(() => setSilentMode(s => ({...s, audible: Math.max(1, s.audible - 1)})));
   const handleSilentPlus = useLongPress(() => setSilentMode(s => ({...s, silent: s.silent + 1})));
   const handleSilentMinus = useLongPress(() => setSilentMode(s => ({...s, silent: Math.max(1, s.silent - 1)})));
-  
   const handleTargetPlus = useLongPress(() => setAutomation(a => ({...a, targetBpm: Math.min(300, a.targetBpm + 1)})));
   const handleTargetMinus = useLongPress(() => setAutomation(a => ({...a, targetBpm: Math.max(10, a.targetBpm - 1)})));
   const handleStepPlus = useLongPress(() => setAutomation(a => ({...a, step: a.step + 1})));
@@ -172,12 +218,7 @@ export default function MetronomePro() {
   const handleIntervalPlus = useLongPress(() => setAutomation(a => ({...a, intervalValue: a.intervalValue + 1})));
   const handleIntervalMinus = useLongPress(() => setAutomation(a => ({...a, intervalValue: Math.max(1, a.intervalValue - 1)})));
 
-  // --- EFFETS ---
-  
-  // Synchronise le Mode Silence avec le moteur audio
-  useEffect(() => {
-    Engine.setSilentMode(silentMode);
-  }, [silentMode]);
+  useEffect(() => { Engine.setSilentMode(silentMode); }, [silentMode]);
 
   useEffect(() => {
     const unsubscribe = Engine.onBeat((beat, isAccent) => {
@@ -193,11 +234,22 @@ export default function MetronomePro() {
     return () => unsubscribe();
   }, []);
 
-  const updateBpm = useCallback((val: number) => {
-    const newBpm = Math.min(Math.max(val, 10), 300);
-    setBpm(newBpm);
-    Engine.setTempo(newBpm);
-  }, []);
+  useEffect(() => {
+    Engine.setTempoRamp({ 
+      enabled: automation.enabled, 
+      targetBpm: automation.targetBpm, 
+      step: automation.step, 
+      everyBars: automation.intervalValue 
+    });
+  }, [automation]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (isPlaying) { 
+      interval = setInterval(() => setSeconds(s => s + 1), 1000); 
+    }
+    return () => { if (interval) clearInterval(interval); };
+  }, [isPlaying]);
 
   const toggleMetronome = useCallback(async () => {
     if (isPlaying) { 
@@ -225,23 +277,6 @@ export default function MetronomePro() {
     setSavedTracks(savedTracks.filter(t => t.id !== id));
   };
 
-  useEffect(() => {
-    Engine.setTempoRamp({ 
-      enabled: automation.enabled, 
-      targetBpm: automation.targetBpm, 
-      step: automation.step, 
-      everyBars: automation.intervalValue 
-    });
-  }, [automation]);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-    if (isPlaying) { 
-      interval = setInterval(() => setSeconds(s => s + 1), 1000); 
-    }
-    return () => { if (interval) clearInterval(interval); };
-  }, [isPlaying]);
-
   return (
     <main className={`flex items-center justify-center min-h-screen transition-all duration-100 ${flash ? 'bg-cyan-500/20' : 'bg-[#121212]'} p-4 text-white font-sans`}>
       
@@ -254,6 +289,32 @@ export default function MetronomePro() {
         .btn-mini { @apply bg-black/40 hover:bg-white/10 text-white w-6 h-6 flex items-center justify-center rounded-md text-xs font-bold transition-all active:scale-90; }
         .tracks-scrollbar::-webkit-scrollbar { height: 6px; }
         .tracks-scrollbar::-webkit-scrollbar-thumb { background: #00bcd4; border-radius: 10px; }
+        
+        .digital-display {
+           background: #111;
+           border-radius: 8px; /* Réduit */
+           padding: 2px 8px; /* Réduit */
+           display: flex;
+           align-items: center;
+           gap: 8px; /* Réduit */
+           box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+           border: 1px solid #333;
+        }
+        .digital-value {
+           font-family: 'Courier New', monospace;
+           font-size: 20px; /* Réduit de 28px */
+           font-weight: 900;
+           color: #eee;
+           text-shadow: 0 0 10px rgba(255,255,255,0.3);
+           min-width: 24px; /* Réduit */
+           text-align: center;
+        }
+        .digital-btn {
+           color: #666;
+           font-size: 18px; /* Réduit de 24px */
+           transition: color 0.2s;
+        }
+        .digital-btn:hover { color: #fff; }
       `}</style>
 
       {isModalOpen && (
@@ -270,20 +331,16 @@ export default function MetronomePro() {
       )}
 
       <div className="bg-[#1e1e1e] w-full max-w-5xl p-6 rounded-[40px] shadow-2xl border border-white/10">
-        
         <div className="flex items-center justify-between mb-6 gap-6 bg-black/40 p-3 px-6 rounded-2xl border border-white/5">
           <div className="px-4 mt-6 w-1/2 ml-[20%]">
-             <input type="range" min="10" max="300" value={bpm} onChange={(e) => updateBpm(parseInt(e.target.value))} className="tempo-slider" />
+              <input type="range" min="10" max="300" value={bpm} onChange={(e) => updateBpm(parseInt(e.target.value))} className="tempo-slider" />
           </div>
           <div className="flex gap-4 items-center">
-            {/* DRAPEAU FRANCAIS SVG */}
             <button onClick={() => setLang("fr")} className={`transition-all hover:scale-110 overflow-hidden rounded-sm w-8 h-6 flex shadow-sm ${lang === 'fr' ? 'ring-2 ring-cyan-400 opacity-100' : 'opacity-40'}`}>
               <div className="w-1/3 h-full bg-[#002395]"></div>
               <div className="w-1/3 h-full bg-white"></div>
               <div className="w-1/3 h-full bg-[#ED2939]"></div>
             </button>
-            
-            {/* DRAPEAU ANGLAIS (UK) SVG */}
             <button onClick={() => setLang("en")} className={`transition-all hover:scale-110 overflow-hidden rounded-sm w-8 h-6 flex shadow-sm ${lang === 'en' ? 'ring-2 ring-cyan-400 opacity-100' : 'opacity-40'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 30" className="w-full h-full">
                 <clipPath id="s"><path d="M0,0 v30 h60 v-30 z"/></clipPath>
@@ -314,7 +371,7 @@ export default function MetronomePro() {
               <h3 className="text-[10px] font-black uppercase text-zinc-300 mb-4 tracking-widest text-center">{t.notes}</h3>
               <div className="grid grid-cols-4 gap-2">
                 {noteSubdivisions.map((sub) => (
-                  <button key={sub.id} onClick={() => { setActiveSub(sub.id); Engine.setSubdivision(sub.id as Parameters<typeof Engine.setSubdivision>[0]); }} className={`p-1 rounded-lg border transition-all hover:scale-105 flex items-center justify-center aspect-square ${activeSub === sub.id ? "border-orange-500 bg-orange-500/20" : "border-zinc-800 bg-zinc-900/50 hover:border-zinc-600"}`}>
+                  <button key={sub.id} onClick={() => { setActiveSub(sub.id); Engine.setSubdivision(sub.id); }} className={`p-1 rounded-lg border transition-all hover:scale-105 flex items-center justify-center aspect-square ${activeSub === sub.id ? "border-orange-500 bg-orange-500/20" : "border-zinc-800 bg-zinc-900/50 hover:border-zinc-600"}`}>
                     <NoteIcon id={sub.id} active={activeSub === sub.id} />
                   </button>
                 ))}
@@ -330,28 +387,50 @@ export default function MetronomePro() {
                 <div className="mt-4 text-cyan-400/70 font-mono text-xs">{t.delai} <span className="text-white">{delayMs}</span> ms</div>
               </div>
               <div className="flex flex-col gap-4">
-                <button onClick={() => updateBpm(bpm + 1)} className="btn-tempo">＋</button>
-                <button onClick={() => updateBpm(bpm - 1)} className="btn-tempo">－</button>
+                <button {...handleBpmPlus} className="btn-tempo">＋</button>
+                <button {...handleBpmMinus} className="btn-tempo">－</button>
               </div>
             </div>
 
+            {/* SECTION AJOUTÉE : TEMPS PAR MESURE & DÉCOMPTE (TAILLE RÉDUITE) */}
+            <div className="flex justify-around items-center bg-black/20 p-2 rounded-[25px] border border-white/5">
+               <div className="flex flex-col items-center gap-1">
+                  <span className="text-[8px] text-cyan-400 uppercase font-black tracking-wider">{t.tempsParMesure}</span>
+                  <div className="digital-display">
+                    <button {...handleBeatsMinus} className="digital-btn">－</button>
+                    <span className="digital-value">{beatsPerMeasure}</span>
+                    <button {...handleBeatsPlus} className="digital-btn">＋</button>
+                  </div>
+               </div>
+               <div className="flex flex-col items-center gap-1">
+                  <span className="text-[8px] text-cyan-400 uppercase font-black tracking-wider">{t.decompte}</span>
+                  <div className="digital-display">
+                    <button {...handleCountdownMinus} className="digital-btn">－</button>
+                    <span className="digital-value">{countdownMeasures}</span>
+                    <button {...handleCountdownPlus} className="digital-btn">＋</button>
+                  </div>
+               </div>
+            </div>
+
+            {/* SECTION TEMPS & MESURES (TAILLE RÉDUITE) */}
             <div className="grid grid-cols-2 gap-4">
-                <div className="bg-zinc-900/80 p-4 rounded-3xl border border-white/5 text-center">
-                  <span className="text-[10px] text-zinc-300 uppercase font-black block mb-1">{t.temps}</span>
-                  <div className="text-4xl font-mono font-black text-green-400">{currentBeatState + 1}</div>
+                <div className="bg-zinc-900/80 p-2 rounded-2xl border border-white/5 text-center">
+                  <span className="text-[9px] text-zinc-300 uppercase font-black block mb-0.5">{t.temps}</span>
+                  <div className="text-2xl font-mono font-black text-green-400">{currentBeatState + 1}</div>
                 </div>
-                <div className="bg-zinc-900/80 p-4 rounded-3xl border border-white/5 text-center">
-                  <span className="text-[10px] text-zinc-300 uppercase font-black block mb-1">{t.mesures}</span>
-                  <div className="text-4xl font-mono font-black text-orange-400">{totalMeasures}</div>
+                <div className="bg-zinc-900/80 p-2 rounded-2xl border border-white/5 text-center">
+                  <span className="text-[9px] text-zinc-300 uppercase font-black block mb-0.5">{t.mesures}</span>
+                  <div className="text-2xl font-mono font-black text-orange-400">{totalMeasures}</div>
                 </div>
             </div>
 
+            {/* BOUTONS PLAY ET ENREGISTRER (TAILLE RÉDUITE) */}
             <div className="flex gap-4">
-              <button onClick={toggleMetronome} className={`flex-1 py-6 rounded-[30px] flex justify-center items-center transition-all hover:brightness-110 active:scale-95 ${isPlaying ? 'bg-red-600 shadow-lg shadow-red-900/20' : 'bg-green-600 shadow-lg shadow-green-900/20'}`}>
-                {isPlaying ? <div className="w-10 h-10 bg-white rounded-lg" /> : <svg viewBox="0 0 24 24" fill="currentColor" className="w-16 h-16 text-white ml-2"><path d="M8 5v14l11-7z" /></svg>}
+              <button onClick={toggleMetronome} className={`flex-1 py-4 rounded-[25px] flex justify-center items-center transition-all hover:brightness-110 active:scale-95 ${isPlaying ? 'bg-red-600 shadow-lg shadow-red-900/20' : 'bg-green-600 shadow-lg shadow-green-900/20'}`}>
+                {isPlaying ? <div className="w-6 h-6 bg-white rounded-md" /> : <svg viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 text-white ml-1"><path d="M8 5v14l11-7z" /></svg>}
               </button>
-              <button onClick={() => setIsModalOpen(true)} className="flex-1 py-6 rounded-[30px] bg-cyan-400 flex justify-center items-center transition-all hover:brightness-110 active:scale-95 shadow-lg shadow-cyan-900/20">
-                <svg viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2.5" className="w-12 h-12"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
+              <button onClick={() => setIsModalOpen(true)} className="flex-1 py-4 rounded-[25px] bg-cyan-400 flex justify-center items-center transition-all hover:brightness-110 active:scale-95 shadow-lg shadow-cyan-900/20">
+                <svg viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2.5" className="w-8 h-8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
               </button>
             </div>
 
@@ -360,12 +439,7 @@ export default function MetronomePro() {
               <div className="flex gap-3 overflow-x-visible tracks-scrollbar pb-3 px-2">
                 {savedTracks.length === 0 ? <div className="w-full text-center py-4 text-zinc-600 text-[10px] uppercase italic tracking-widest">Aucune piste...</div> : savedTracks.map((track) => (
                   <button key={track.id} onClick={() => updateBpm(track.bpm)} className="relative flex-shrink-0 bg-zinc-900/80 border border-white/10 rounded-2xl p-3 min-w-[120px] transition-all hover:border-cyan-500/50 hover:bg-zinc-800 isolate overflow-visible">
-                    <div 
-                      onClick={(e) => deleteTrack(track.id, e)} 
-                      className="absolute -top-1.5 -right-1.5 bg-red-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shadow-xl hover:bg-red-500 hover:scale-125 hover:rotate-90 transition-all duration-300 z-50 cursor-pointer pointer-events-auto"
-                    >
-                      ✕
-                    </div>
+                    <div onClick={(e) => deleteTrack(track.id, e)} className="absolute -top-1.5 -right-1.5 bg-red-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shadow-xl hover:bg-red-500 hover:scale-125 hover:rotate-90 transition-all duration-300 z-50 cursor-pointer pointer-events-auto">✕</div>
                     <div className="text-[10px] font-black text-cyan-400 truncate uppercase">{track.name}</div>
                     <div className="text-lg font-mono font-black text-white">{track.bpm} <span className="text-[10px] opacity-40">BPM</span></div>
                   </button>
@@ -408,7 +482,11 @@ export default function MetronomePro() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-black/40 rounded-xl p-2">
                   <span className="text-[8px] font-black uppercase text-zinc-500 block">Initial</span>
-                  <div className="text-xs font-mono text-center text-white mt-1">{bpm}</div>
+                  <div className="flex items-center justify-between mt-1">
+                    <button {...handleBpmMinus} className="btn-mini">－</button>
+                    <span className="text-xs font-mono text-cyan-400 mx-1">{bpm}</span>
+                    <button {...handleBpmPlus} className="btn-mini">＋</button>
+                  </div>
                 </div>
                 <div className="bg-black/40 rounded-xl p-2">
                   <span className="text-[8px] font-black uppercase text-zinc-500 block">Cible</span>

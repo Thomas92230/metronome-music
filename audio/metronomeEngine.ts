@@ -183,14 +183,23 @@ function scheduler() {
   }
 }
 
+// --- EXPORTS ---
+
 export function setSilentMode(config: { enabled: boolean; audible: number; silent: number }) {
   silentMode = config;
 }
 
-export function setTimeSignature(beats: number) {
+/**
+ * Définit le nombre de temps par mesure.
+ * Utilisé par l'UI via le nom 'setBeatsPerMeasure'
+ */
+export function setBeatsPerMeasure(beats: number) {
   settings.beatsPerBar = beats;
   if (currentBeat >= beats) currentBeat = 0;
 }
+
+// Alias pour la compatibilité descendante si nécessaire
+export const setTimeSignature = setBeatsPerMeasure;
 
 export function setSubdivision(val: Subdivision) {
   settings.subdivision = val;
